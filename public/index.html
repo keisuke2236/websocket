@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>シンプルWebSocketクライアント</title>
+  <style>
+    body {
+      font-family: 'Helvetica Neue', Arial, sans-serif;
+      margin: 20px;
+      padding: 0;
+    }
+
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      border: 1px solid #ccc;
+      border-radius: 5px;
+      padding: 20px;
+    }
+
+    h1 {
+      text-align: center;
+      color: #333;
+    }
+
+    .status {
+      margin: 15px 0;
+      padding: 10px;
+      background-color: #f0f0f0;
+      border-radius: 5px;
+    }
+
+    .messages {
+      height: 300px;
+      overflow-y: auto;
+      border: 1px solid #ddd;
+      padding: 10px;
+      margin-bottom: 10px;
+      background-color: #f9f9f9;
+    }
+
+    .message {
+      margin: 5px 0;
+      padding: 5px;
+    }
+
+    .system {
+      color: #777;
+      font-style: italic;
+    }
+
+    .received {
+      color: #0066cc;
+    }
+
+    .sent {
+      color: #009900;
+      text-align: right;
+    }
+
+    .controls {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 15px;
+    }
+
+    button {
+      padding: 8px 15px;
+      background-color: #4a69bd;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background-color: #5a77c7;
+    }
+
+    button:disabled {
+      background-color: #a4b0be;
+      cursor: not-allowed;
+    }
+
+    .input-area {
+      display: flex;
+      gap: 10px;
+    }
+
+    input {
+      flex: 1;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>WebSocketクライアント</h1>
+
+    <div class="status" id="status">
+      状態: 切断
+    </div>
+
+    <div class="controls">
+      <button id="connectBtn">接続</button>
+      <button id="disconnectBtn" disabled>切断</button>
+    </div>
+
+    <div class="messages" id="messages">
+      <div class="message system">「接続」ボタンをクリックしてサーバーに接続してください。</div>
+    </div>
+
+    <div class="input-area">
+      <input type="text" id="messageInput" placeholder="メッセージを入力..." disabled>
+      <button id="sendBtn" disabled>送信</button>
+    </div>
+  </div>
+
+  <script>
+    // DOM要素
+    const statusEl = document.getElementById('status');
+    const messagesEl = document.getElementById('messages');
+    const messageInput = document.getElementById('messageInput');
+    const connectBtn = document.getElementById('connectBtn');
+    const disconnectBtn = document.getElementById('disconnectBtn');
+    const sendBtn = document.getElementById('sendBtn');
+
+    // WebSocket変数
+    let socket = null;
+    let clientId = null;
+
+    // 接続ボタンのクリックイベント
+    connectBtn.addEventListener('click', () => {
+      console.log('接続ボタンがクリックされました');
+      connectToServer();
+    });
+
+    // 切断ボタンのクリックイベント
+    disconnectBtn.addEventListener('click', () => {
+      disconnectFromServer();
+    });
+
+    // 送信ボタンのクリックイベント
+    sendBtn.addEventListener('click', () => {
+      sendMessage();
+    });
+
+    // Enterキーで送信
+    messageInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        sendMessage();
+      }
+    });
+
+    // サーバーに接続する関数
+    function connectToServer() {
+      addSystemMessage('サーバーに接続しています...');
+
+      try {
+        // WebSocketサーバーに接続
+        socket = new WebSocket('ws://localhost:2236');
+
+        // 接続イベント
+        socket.addEventListener('open', (event) => {
+          console.log('サーバーに接続しました');
+          statusEl.textContent = '状態: 接続済み';
+          addSystemMessage('サーバーに接続しました');
+
+          // ボタンの状態を更新
+          connectBtn.disabled = true;
+          disconnectBtn.disabled = false;
+          messageInput.disabled = false;
+          sendBtn.disabled = false;
+        });
+
+        // メッセージ受信イベント
+        socket.addEventListener('message', (event) => {
+          console.log('メッセージを受信:', event.data);
+
+          try {
+            const message = JSON.parse(event.data);
+
+            // メッセージタイプに応じた処理
+            switch (message.type) {
+              case 'welcome':
+                addSystemMessage(message.message);
+                break;
+
+              case 'identity':
+                clientId = message.clientId;
+                addSystemMessage(`クライアントID: ${clientId}`);
+                break;
+
+              case 'chat':
+                if (message.clientId === clientId) {
+                  // 自分のメッセージ
+                  addSentMessage(message.message);
+                } else {
+                  // 他のクライアントからのメッセージ
+                  addReceivedMessage(`${message.clientId}: ${message.message}`);
+                }
+                break;
+
+              case 'user_joined':
+                addSystemMessage(`クライアント ${message.clientId} が接続しました`);
+                break;
+
+              case 'user_left':
+                addSystemMessage(`クライアント ${message.clientId} が切断しました`);
+                break;
+
+              case 'status':
+                // ステータス更新
+                break;
+
+              default:
+                console.log('不明なメッセージタイプ:', message.type);
+            }
+          } catch (err) {
+            console.error('メッセージの解析に失敗:', err);
+            addSystemMessage(`受信データ: ${event.data}`);
+          }
+        });
+
+        // 切断イベント
+        socket.addEventListener('close', (event) => {
+          console.log('サーバーから切断されました');
+          statusEl.textContent = '状態: 切断';
+          addSystemMessage('サーバーから切断されました');
+
+          // ボタンの状態をリセット
+          connectBtn.disabled = false;
+          disconnectBtn.disabled = true;
+          messageInput.disabled = true;
+          sendBtn.disabled = true;
+
+          socket = null;
+        });
+
+        // エラーイベント
+        socket.addEventListener('error', (event) => {
+          console.error('WebSocketエラー:', event);
+          statusEl.textContent = '状態: エラー';
+          addSystemMessage('接続エラーが発生しました');
+        });
+      } catch (err) {
+        console.error('接続の確立に失敗:', err);
+        addSystemMessage('接続の確立に失敗しました: ' + err.message);
+      }
+    }
+
+    // サーバーから切断する関数
+    function disconnectFromServer() {
+      if (socket) {
+        socket.close();
+      }
+    }
+
+    // メッセージを送信する関数
+    function sendMessage() {
+      if (!socket || socket.readyState !== WebSocket.OPEN || !messageInput.value.trim()) {
+        return;
+      }
+
+      const text = messageInput.value.trim();
+      console.log('メッセージを送信:', text);
+
+      // サーバーにメッセージを送信
+      socket.send(JSON.stringify({
+        type: 'chat',
+        message: text
+      }));
+
+      // 入力欄をクリア
+      messageInput.value = '';
+      messageInput.focus();
+    }
+
+    // システムメッセージを表示
+    function addSystemMessage(text) {
+      const div = document.createElement('div');
+      div.className = 'message system';
+      div.textContent = text;
+      messagesEl.appendChild(div);
+      scrollToBottom();
+    }
+
+    // 受信メッセージを表示
+    function addReceivedMessage(text) {
+      const div = document.createElement('div');
+      div.className = 'message received';
+      div.textContent = text;
+      messagesEl.appendChild(div);
+      scrollToBottom();
+    }
+
+    // 送信メッセージを表示
+    function addSentMessage(text) {
+      const div = document.createElement('div');
+      div.className = 'message sent';
+      div.textContent = text;
+      messagesEl.appendChild(div);
+      scrollToBottom();
+    }
+
+    // メッセージエリアを下にスクロール
+    function scrollToBottom() {
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+  </script>
+</body>
+
+</html>
